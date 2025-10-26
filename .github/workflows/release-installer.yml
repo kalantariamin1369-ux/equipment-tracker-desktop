@@ -1,0 +1,59 @@
+name: Release Equipment Tracker Installer
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  build-and-release:
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore dependencies
+        run: dotnet restore
+
+      - name: Build (Release)
+        run: dotnet build --configuration Release --no-restore
+
+      - name: Publish app
+        run: |
+          mkdir output
+          dotnet publish -c Release -o output
+
+      - name: Package artifact (ZIP)
+        run: |
+          powershell Compress-Archive -Path output\* -DestinationPath Equipment-Tracker-Installer-${{ github.ref_name }}.zip
+        shell: pwsh
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Equipment-Tracker-Installer-${{ github.ref_name }}.zip
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Notify Slack
+        if: always()
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          payload: '{"text": "📦 Release ${{ github.ref_name }} published for Equipment Tracker Installer — status: ${{ job.status }}"}'
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
