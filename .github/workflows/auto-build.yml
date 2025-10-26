@@ -1,0 +1,77 @@
+name: Equipment Tracker Auto-Build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Auto-detect solution or project
+        id: detect
+        run: |
+          $solution = Get-ChildItem -Recurse -Filter *.sln | Select-Object -First 1
+          $project = Get-ChildItem -Recurse -Filter *.csproj | Select-Object -First 1
+          if ($solution) {
+            echo "solution=$($solution.FullName)" >> $env:GITHUB_OUTPUT
+          } elseif ($project) {
+            echo "solution=$($project.FullName)" >> $env:GITHUB_OUTPUT
+          } else {
+            Write-Error 'No .sln or .csproj file found.'
+          }
+        shell: pwsh
+
+      - name: Restore dependencies
+        run: dotnet restore ${{ steps.detect.outputs.solution }}
+
+      - name: Build (Release)
+        run: dotnet build ${{ steps.detect.outputs.solution }} -c Release --no-restore
+
+      - name: Publish app
+        run: |
+          mkdir output
+          dotnet publish ${{ steps.detect.outputs.solution }} -c Release -o output
+
+      - name: Package installer artifact
+        run: |
+          if (Test-Path output) {
+            Compress-Archive -Path output/* -DestinationPath Equipment-Tracker-Installer.zip
+          } else {
+            Write-Error 'Output folder not found.'
+          }
+        shell: pwsh
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Equipment-Tracker-Installer
+          path: Equipment-Tracker-Installer.zip
+
+      - name: Slack Notification (optional)
+        if: always()
+        continue-on-error: true
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          payload: '{"text": "${{ job.status == 'success' && '✅' || '❌' }} Auto-build for Equipment Tracker completed: ${{ job.status }}."}'
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
