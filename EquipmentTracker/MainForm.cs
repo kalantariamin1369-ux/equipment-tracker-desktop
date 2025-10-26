@@ -39,7 +39,11 @@ namespace EquipmentTracker
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Error initializing application: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                var msg = ex is DllNotFoundException || ex.InnerException is DllNotFoundException
+                    ? "A required native dependency (SQLite.Interop.dll) was not found. Please ensure the application was built for x64 and all files were copied from the Release output."
+                    : ex.Message;
+                
+                MessageBox.Show($"Error initializing application: {msg}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
