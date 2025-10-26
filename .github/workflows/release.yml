@@ -1,0 +1,92 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g., v1.0.0)"
+        required: true
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Setup NuGet
+        uses: NuGet/setup-nuget@v2
+
+      - name: Restore NuGet packages
+        run: nuget restore EquipmentTracker.sln
+
+      - name: Build (Release)
+        run: msbuild EquipmentTracker.sln /p:Configuration=Release /p:Platform="Any CPU"
+
+      - name: Compute version
+        id: ver
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF -like "refs/tags/*") {
+            $tag = $env:GITHUB_REF -replace "refs/tags/", ""
+          } elseif ('${{ github.event.inputs.version }}') {
+            $tag = '${{ github.event.inputs.version }}'
+          } else {
+            $tag = "v0.0.0"
+          }
+          echo "version=$tag" >> $env:GITHUB_OUTPUT
+
+      - name: Prepare payload
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path build\release | Out-Null
+          Copy-Item -Recurse -Force "EquipmentTracker\bin\Release\*" "build\release\"
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          iwr -Uri https://jrsoftware.org/download.php/is.exe -OutFile is.exe
+          Start-Process .\is.exe -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART" -Wait
+          $innobin = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $innobin)) { throw "ISCC not found" }
+
+      - name: Create installer via Inno Setup
+        shell: pwsh
+        run: |
+          $ver = '${{ steps.ver.outputs.version }}'.TrimStart('v')
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" \
+            /DAppVersion=$ver \
+            /DBuildPayload="${{ github.workspace }}\\build\\release" \
+            build\\installer\\setup.iss
+
+      - name: Create portable ZIP
+        shell: pwsh
+        run: |
+          Compress-Archive -Path build\release\* -DestinationPath "EquipmentTracker-Windows-Portable-${{ steps.ver.outputs.version }}.zip" -Force
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts
+          path: |
+            build\installer\Output\*.exe
+            EquipmentTracker-Windows-Portable-${{ steps.ver.outputs.version }}.zip
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.version }}
+          draft: false
+          prerelease: false
+          files: |
+            build/installer/Output/*.exe
+            EquipmentTracker-Windows-Portable-${{ steps.ver.outputs.version }}.zip
