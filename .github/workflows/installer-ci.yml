@@ -1,0 +1,50 @@
+name: Equipment Tracker Installer CI
+
+on:
+  push:
+    branches:
+      - installer-setup
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore dependencies
+        run: dotnet restore
+
+      - name: Build Installer
+        run: dotnet build --configuration Release
+
+      - name: Publish artifacts
+        run: |
+          mkdir output
+          dotnet publish -c Release -o output
+
+      - name: Upload Installer Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: Equipment-Tracker-Installer
+          path: output
+
+  notify:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Send Slack Notification
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          payload: '{"text": "✅ Equipment Tracker Installer build completed successfully and is ready for testing."}'
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
