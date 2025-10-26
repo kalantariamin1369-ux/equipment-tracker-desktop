@@ -2,49 +2,63 @@ name: Equipment Tracker Installer CI
 
 on:
   push:
-    branches:
-      - installer-setup
+    branches: [ main ]
   pull_request:
-    branches:
-      - main
+    branches: [ main ]
+  schedule:
+    - cron: "0 2 * * *"
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: windows-2022
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v3
+        uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
 
       - name: Restore dependencies
         run: dotnet restore
 
-      - name: Build Installer
-        run: dotnet build --configuration Release
+      - name: Build (Release)
+        run: dotnet build --configuration Release --no-restore
 
-      - name: Publish artifacts
+      - name: Publish app
         run: |
           mkdir output
           dotnet publish -c Release -o output
 
+      - name: Upload Artifact (ZIP)
+        run: |
+          powershell Compress-Archive -Path output\* -DestinationPath Equipment-Tracker-Installer.zip
+        shell: pwsh
+
       - name: Upload Installer Artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: Equipment-Tracker-Installer
-          path: output
+          path: Equipment-Tracker-Installer.zip
 
   notify:
     runs-on: ubuntu-latest
     needs: build
     steps:
       - name: Send Slack Notification
+        if: always()
         uses: slackapi/slack-github-action@v1.24.0
         with:
-          payload: '{"text": "✅ Equipment Tracker Installer build completed successfully and is ready for testing."}'
+          payload: '{"text": "${{ job.status == 'success' && '✅' || '❌' }} Equipment Tracker Installer build ${{ job.status }} for `${{ github.ref_name }}`. Artifact: Equipment-Tracker-Installer.zip"}'
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
