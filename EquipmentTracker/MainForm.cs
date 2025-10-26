@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Drawing;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.IO;
 
@@ -10,8 +12,9 @@ namespace EquipmentTracker
     public partial class MainForm : Form
     {
         private EquipmentRepository _repository;
+        private BindingList<Equipment> _equipmentBindingList;
+        private BindingList<Transaction> _transactionBindingList;
         private List<Equipment> _allEquipment;
-        private List<Transaction> _allTransactions;
         
         // UI Controls
         private TabControl tabControl;
@@ -32,10 +35,15 @@ namespace EquipmentTracker
         public MainForm()
         {
             InitializeComponent();
+            this.Load += async (s, e) => await MainForm_LoadAsync();
+        }
+
+        private async Task MainForm_LoadAsync()
+        {
             try
             {
                 _repository = new EquipmentRepository();
-                LoadData();
+                await LoadDataAsync();
             }
             catch (Exception ex)
             {
@@ -44,6 +52,7 @@ namespace EquipmentTracker
                     : ex.Message;
                 
                 MessageBox.Show($"Error initializing application: {msg}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                this.Close();
             }
         }
 
@@ -333,15 +342,22 @@ namespace EquipmentTracker
             this.Controls.Add(statusLabel);
         }
 
-        private void LoadData()
+        private async Task LoadDataAsync()
         {
             try
             {
-                _allEquipment = _repository?.GetAllEquipment() ?? new List<Equipment>();
-                _allTransactions = _repository?.GetTransactions() ?? new List<Transaction>();
+                this.Cursor = Cursors.WaitCursor;
+                statusLabel.Text = "Loading data...";
                 
-                UpdateEquipmentGrid();
-                UpdateTransactionGrid();
+                _allEquipment = await _repository.GetAllEquipmentAsync();
+                _equipmentBindingList = new BindingList<Equipment>(_allEquipment);
+                
+                var transactions = await _repository.GetTransactionsAsync(1, 200);
+                _transactionBindingList = new BindingList<Transaction>(transactions);
+
+                equipmentGrid.DataSource = _equipmentBindingList;
+                transactionGrid.DataSource = _transactionBindingList;
+
                 UpdateCategoryFilter();
                 UpdateStatus();
             }
@@ -349,17 +365,23 @@ namespace EquipmentTracker
             {
                 MessageBox.Show($"Error loading data: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+            finally
+            {
+                statusLabel.Text = "Ready";
+                this.Cursor = Cursors.Default;
+            }
         }
 
         private void UpdateEquipmentGrid()
         {
-            var filteredEquipment = FilterEquipment();
-            equipmentGrid.DataSource = new BindingSource(filteredEquipment, null);
+            var filtered = FilterEquipment();
+            equipmentGrid.DataSource = new BindingList<Equipment>(filtered);
         }
 
         private void UpdateTransactionGrid()
         {
-            transactionGrid.DataSource = new BindingSource(_allTransactions, null);
+            // Transaction grid is updated when new transactions are added
+            transactionGrid.Refresh();
         }
 
         private void UpdateCategoryFilter()
@@ -373,7 +395,7 @@ namespace EquipmentTracker
 
         private List<Equipment> FilterEquipment()
         {
-            var filtered = _allEquipment.AsEnumerable();
+            IEnumerable<Equipment> filtered = _allEquipment;
             
             if (!string.IsNullOrEmpty(searchBox?.Text))
             {
@@ -426,7 +448,7 @@ namespace EquipmentTracker
             }
         }
 
-        private void AddButton_Click(object sender, EventArgs e)
+        private async void AddButton_Click(object sender, EventArgs e)
         {
             if (string.IsNullOrWhiteSpace(nameBox.Text))
             {
@@ -436,6 +458,9 @@ namespace EquipmentTracker
             
             try
             {
+                this.Cursor = Cursors.WaitCursor;
+                statusLabel.Text = "Adding equipment...";
+
                 var equipment = new Equipment
                 {
                     Name = nameBox.Text.Trim(),
@@ -444,19 +469,28 @@ namespace EquipmentTracker
                     MinStockLevel = (int)minStockBox.Value
                 };
                 
-                _repository?.AddEquipment(equipment);
-                LoadData();
-                ClearInputs();
+                await _repository.AddEquipmentAsync(equipment);
                 
-                MessageBox.Show("Equipment added successfully.", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                // Update in-memory list and UI
+                _allEquipment.Add(equipment);
+                _equipmentBindingList.Add(equipment);
+                UpdateCategoryFilter();
+                UpdateStatus();
+                ClearInputs();
+
+                statusLabel.Text = "Equipment added successfully.";
             }
             catch (Exception ex)
             {
                 MessageBox.Show($"Error adding equipment: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+            finally
+            {
+                this.Cursor = Cursors.Default;
+            }
         }
 
-        private void UpdateButton_Click(object sender, EventArgs e)
+        private async void UpdateButton_Click(object sender, EventArgs e)
         {
             if (equipmentGrid.SelectedRows.Count == 0) return;
             
@@ -464,24 +498,33 @@ namespace EquipmentTracker
             {
                 try
                 {
+                    this.Cursor = Cursors.WaitCursor;
+                    statusLabel.Text = "Updating equipment...";
+
                     equipment.Name = nameBox.Text.Trim();
                     equipment.Category = categoryBox.Text.Trim();
-                    equipment.Quantity = (int)quantityBox.Value;
                     equipment.MinStockLevel = (int)minStockBox.Value;
                     
-                    _repository?.UpdateEquipment(equipment);
-                    LoadData();
+                    await _repository.UpdateEquipmentAsync(equipment);
                     
-                    MessageBox.Show("Equipment updated successfully.", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    _equipmentBindingList.ResetBindings();
+                    UpdateCategoryFilter();
+                    UpdateStatus();
+                    
+                    statusLabel.Text = "Equipment updated successfully.";
                 }
                 catch (Exception ex)
                 {
                     MessageBox.Show($"Error updating equipment: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }
+                finally
+                {
+                    this.Cursor = Cursors.Default;
+                }
             }
         }
 
-        private void DeleteButton_Click(object sender, EventArgs e)
+        private async void DeleteButton_Click(object sender, EventArgs e)
         {
             if (equipmentGrid.SelectedRows.Count == 0) return;
             
@@ -497,44 +540,67 @@ namespace EquipmentTracker
                 {
                     try
                     {
-                        _repository?.DeleteEquipment(equipment.Id);
-                        LoadData();
+                        this.Cursor = Cursors.WaitCursor;
+                        statusLabel.Text = "Deleting equipment...";
+                        
+                        await _repository.DeleteEquipmentAsync(equipment);
+
+                        _allEquipment.Remove(equipment);
+                        _equipmentBindingList.Remove(equipment);
+                        UpdateCategoryFilter();
+                        UpdateStatus();
                         ClearInputs();
                         
-                        MessageBox.Show("Equipment deleted successfully.", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        statusLabel.Text = "Equipment deleted successfully.";
                     }
                     catch (Exception ex)
                     {
                         MessageBox.Show($"Error deleting equipment: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     }
+                    finally
+                    {
+                        this.Cursor = Cursors.Default;
+                    }
                 }
             }
         }
 
-        private void AdjustQuantity(bool isAdd)
+        private async void AdjustQuantity(bool isAdd)
         {
             if (equipmentGrid.SelectedRows.Count == 0) return;
             
             if (equipmentGrid.SelectedRows[0].DataBoundItem is Equipment equipment)
             {
-                string input = Microsoft.VisualBasic.Interaction.InputBox(
-                    $"Enter quantity to {(isAdd ? "add" : "remove")}:",
-                    "Adjust Quantity",
-                    "1");
-                
-                if (int.TryParse(input, out int adjustment) && adjustment > 0)
+                var prompt = $"Enter quantity to {(isAdd ? "add to" : "remove from")} '{equipment.Name}':";
+                if (ShowInputDialog(prompt, "Adjust Quantity", out int adjustment) && adjustment > 0)
                 {
                     try
                     {
-                        var newQuantity = isAdd ? equipment.Quantity + adjustment : equipment.Quantity - adjustment;
-                        if (newQuantity < 0) newQuantity = 0;
+                        this.Cursor = Cursors.WaitCursor;
+                        statusLabel.Text = "Adjusting quantity...";
                         
-                        _repository?.UpdateQuantity(equipment.Id, newQuantity, isAdd ? "Add" : "Remove", $"Quantity {(isAdd ? "added" : "removed")}: {adjustment}");
-                        LoadData();
+                        var oldQuantity = equipment.Quantity;
+                        var newQuantity = isAdd ? oldQuantity + adjustment : Math.Max(0, oldQuantity - adjustment);
+                        var changeType = isAdd ? "Add" : "Remove";
+                        var notes = $"{(isAdd ? "Added" : "Removed")} {adjustment} units.";
+
+                        await _repository.UpdateQuantityAsync(equipment.Id, equipment.Name, oldQuantity, newQuantity, changeType, notes);
+                        
+                        equipment.Quantity = newQuantity;
+                        equipment.LastUpdated = DateTime.Now;
+                        
+                        _equipmentBindingList.ResetBindings();
+                        UpdateStatus();
+                        
+                        statusLabel.Text = "Quantity adjusted successfully.";
                     }
                     catch (Exception ex)
                     {
                         MessageBox.Show($"Error adjusting quantity: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    }
+                    finally
+                    {
+                        this.Cursor = Cursors.Default;
                     }
                 }
             }
@@ -548,11 +614,51 @@ namespace EquipmentTracker
             minStockBox.Value = 0;
         }
 
+        private bool ShowInputDialog(string text, string caption, out int value)
+        {
+            Form prompt = new Form()
+            {
+                Width = 400,
+                Height = 150,
+                Text = caption,
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                StartPosition = FormStartPosition.CenterScreen,
+                MaximizeBox = false,
+                MinimizeBox = false
+            };
+            
+            Label textLabel = new Label() { Left = 20, Top = 20, Text = text, AutoSize = true, MaximumSize = new Size(350, 0) };
+            NumericUpDown inputBox = new NumericUpDown() { Left = 20, Top = 50, Width = 350, Minimum = 1, Maximum = 99999, Value = 1 };
+            Button confirmation = new Button() { Text = "OK", Left = 270, Width = 100, Top = 80, DialogResult = DialogResult.OK };
+            Button cancel = new Button() { Text = "Cancel", Left = 160, Width = 100, Top = 80, DialogResult = DialogResult.Cancel };
+            
+            confirmation.Click += (s, ev) => { prompt.Close(); };
+            cancel.Click += (s, ev) => { prompt.Close(); };
+            
+            prompt.Controls.Add(textLabel);
+            prompt.Controls.Add(inputBox);
+            prompt.Controls.Add(confirmation);
+            prompt.Controls.Add(cancel);
+            prompt.AcceptButton = confirmation;
+            prompt.CancelButton = cancel;
+
+            value = (int)inputBox.Value;
+            if (prompt.ShowDialog() == DialogResult.OK)
+            {
+                value = (int)inputBox.Value;
+                return true;
+            }
+            return false;
+        }
+
         // Menu Event Handlers
-        private void ExportCSV_Click(object sender, EventArgs e)
+        private async void ExportCSV_Click(object sender, EventArgs e)
         {
             try
             {
+                this.Cursor = Cursors.WaitCursor;
+                statusLabel.Text = "Exporting data...";
+                
                 var saveDialog = new SaveFileDialog
                 {
                     Filter = "CSV files (*.csv)|*.csv|All files (*.*)|*.*",
@@ -571,7 +677,8 @@ namespace EquipmentTracker
                         ["LastUpdated"] = e => e.LastUpdated
                     };
                     
-                    Utilities.ExportToCsv(_allEquipment, saveDialog.FileName, columnMappings);
+                    await Task.Run(() => Utilities.ExportToCsv(_allEquipment, saveDialog.FileName, columnMappings));
+                    statusLabel.Text = "Equipment exported successfully.";
                     MessageBox.Show("Equipment exported successfully.", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
             }
@@ -579,12 +686,19 @@ namespace EquipmentTracker
             {
                 MessageBox.Show($"Error exporting data: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+            finally
+            {
+                this.Cursor = Cursors.Default;
+            }
         }
 
-        private void BackupDatabase_Click(object sender, EventArgs e)
+        private async void BackupDatabase_Click(object sender, EventArgs e)
         {
             try
             {
+                this.Cursor = Cursors.WaitCursor;
+                statusLabel.Text = "Creating backup...";
+                
                 var saveDialog = new SaveFileDialog
                 {
                     Filter = "Database files (*.db)|*.db|All files (*.*)|*.*",
@@ -594,13 +708,18 @@ namespace EquipmentTracker
                 
                 if (saveDialog.ShowDialog() == DialogResult.OK)
                 {
-                    _repository?.BackupDatabase(saveDialog.FileName);
+                    await _repository.BackupDatabaseAsync(saveDialog.FileName);
+                    statusLabel.Text = "Database backup created successfully.";
                     MessageBox.Show("Database backup created successfully.", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
             }
             catch (Exception ex)
             {
                 MessageBox.Show($"Error creating backup: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                this.Cursor = Cursors.Default;
             }
         }
 
