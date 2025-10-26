@@ -43,10 +43,31 @@ jobs:
     - name: Build solution
       run: msbuild EquipmentTracker.sln /p:Configuration=${{ matrix.configuration }} /p:Platform="${{ matrix.platform }}"
 
+    - name: Verify main executable
+      shell: pwsh
+      run: |
+        $exe = "EquipmentTracker/bin/${{ matrix.configuration }}/EquipmentTracker.exe"
+        if (Test-Path $exe) {
+          Write-Host "✅ Build successful: $exe"
+        } else {
+          Write-Error "❌ Missing executable: $exe"
+          exit 1
+        }
+
     - name: Upload build artifacts
       if: matrix.configuration == 'Release'
       uses: actions/upload-artifact@v4
       with:
         name: EquipmentTracker-${{ matrix.platform }}-${{ matrix.configuration }}
         path: EquipmentTracker/bin/${{ matrix.configuration }}/
-        retention-days: 7
+        retention-days: 14
+
+  clean-old-workflows:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Disable Alibaba Docker workflow (not used)
+        run: |
+          echo "Archiving alibabacloud.yml workflow to prevent future Docker errors..."
+          mkdir -p .github/workflows/archive
+          if [ -f .github/workflows/alibabacloud.yml ]; then mv .github/workflows/alibabacloud.yml .github/workflows/archive/alibabacloud.yml; fi
+          echo "✅ Deprecated Docker workflow archived."
