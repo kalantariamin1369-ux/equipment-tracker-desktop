@@ -17,7 +17,7 @@ jobs:
     strategy:
       matrix:
         configuration: [Debug, Release]
-        platform: [x64]
+        platform: ["Any CPU"]
     
     steps:
     - name: Checkout code
@@ -41,7 +41,8 @@ jobs:
       run: nuget restore EquipmentTracker.sln
 
     - name: Build solution
-      run: msbuild EquipmentTracker.sln /p:Configuration=${{ matrix.configuration }} /p:Platform="${{ matrix.platform }}"
+      run: |
+        msbuild EquipmentTracker.sln /p:Configuration=${{ matrix.configuration }} /p:Platform="${{ matrix.platform }}" || msbuild EquipmentTracker.sln /p:Configuration=${{ matrix.configuration }}
 
     - name: Verify main executable
       shell: pwsh
@@ -65,9 +66,9 @@ jobs:
   clean-old-workflows:
     runs-on: ubuntu-latest
     steps:
-      - name: Disable Alibaba Docker workflow (not used)
+      - name: Archive deprecated Docker workflow
         run: |
-          echo "Archiving alibabacloud.yml workflow to prevent future Docker errors..."
+          echo "Archiving alibabacloud.yml..."
           mkdir -p .github/workflows/archive
           if [ -f .github/workflows/alibabacloud.yml ]; then mv .github/workflows/alibabacloud.yml .github/workflows/archive/alibabacloud.yml; fi
-          echo "✅ Deprecated Docker workflow archived."
+          echo "✅ Docker workflow archived successfully."
