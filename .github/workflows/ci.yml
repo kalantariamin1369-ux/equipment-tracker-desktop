@@ -1,0 +1,110 @@
+name: CI Build and Test
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    
+    strategy:
+      matrix:
+        platform: [x64, x86]
+        configuration: [Release]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+        
+    - name: Cache NuGet packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.nuget/packages
+        key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+        restore-keys: |
+          ${{ runner.os }}-nuget-
+          
+    - name: Restore dependencies
+      run: dotnet restore
+      
+    - name: Setup SQLite Native Libraries
+      run: |
+        # Download SQLite native libraries for Windows
+        $sqliteVersion = "3.46.0"
+        $x64Url = "https://www.sqlite.org/2024/sqlite-dll-win-x64-3460000.zip"
+        $x86Url = "https://www.sqlite.org/2024/sqlite-dll-win-x86-3460000.zip"
+        
+        # Create directories
+        New-Item -ItemType Directory -Force -Path "runtimes/win-x64/native"
+        New-Item -ItemType Directory -Force -Path "runtimes/win-x86/native"
+        
+        # Download and extract x64
+        Invoke-WebRequest -Uri $x64Url -OutFile "sqlite-x64.zip"
+        Expand-Archive -Path "sqlite-x64.zip" -DestinationPath "temp-x64" -Force
+        Copy-Item "temp-x64/sqlite3.dll" "runtimes/win-x64/native/"
+        
+        # Download and extract x86
+        Invoke-WebRequest -Uri $x86Url -OutFile "sqlite-x86.zip"
+        Expand-Archive -Path "sqlite-x86.zip" -DestinationPath "temp-x86" -Force
+        Copy-Item "temp-x86/sqlite3.dll" "runtimes/win-x86/native/"
+        
+        # Cleanup
+        Remove-Item "sqlite-x64.zip", "sqlite-x86.zip", "temp-x64", "temp-x86" -Recurse -Force
+      shell: pwsh
+      
+    - name: Build
+      run: dotnet build --configuration ${{ matrix.configuration }} --no-restore /p:Platform=${{ matrix.platform }}
+      
+    - name: Run Tests
+      run: dotnet test --configuration ${{ matrix.configuration }} --no-build --verbosity normal /p:Platform=${{ matrix.platform }}
+      continue-on-error: true
+      
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-${{ matrix.platform }}-${{ matrix.configuration }}
+        path: |
+          **/bin/${{ matrix.configuration }}/**
+          !**/bin/${{ matrix.configuration }}/**/ref/**
+          !**/bin/${{ matrix.configuration }}/**/*.pdb
+        retention-days: 7
+        
+    - name: Upload test results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: test-results-${{ matrix.platform }}-${{ matrix.configuration }}
+        path: '**/TestResults/**'
+        retention-days: 7
+
+  code-quality:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+        
+    - name: Restore dependencies
+      run: dotnet restore
+      
+    - name: Run Code Analysis
+      run: dotnet build --configuration Release /p:RunAnalyzers=true /p:TreatWarningsAsErrors=false
+      continue-on-error: true
+      
+    - name: Check formatting
+      run: dotnet format --verify-no-changes --verbosity diagnostic
+      continue-on-error: true
